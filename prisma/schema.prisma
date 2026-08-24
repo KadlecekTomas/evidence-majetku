@@ -1,0 +1,303 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum AssetStatus {
+  ACTIVE
+  IN_SERVICE
+  MISSING
+  RETIRED
+}
+
+enum AssetCondition {
+  GOOD
+  DAMAGED
+  UNKNOWN
+}
+
+enum AssetEventType {
+  CREATED
+  UPDATED
+  MOVED
+  STATUS_CHANGED
+  INVENTORY_SCANNED
+  ISSUE_REPORTED
+  SERVICE_RECORDED
+  RETIRED
+  SYNCED
+}
+
+enum IntegrationProvider {
+  GORDIC
+}
+
+enum IntegrationMode {
+  XRG
+  INT
+  FILE
+}
+
+enum SyncDirection {
+  INBOUND
+  OUTBOUND
+}
+
+enum SyncStatus {
+  PENDING
+  RUNNING
+  SUCCEEDED
+  FAILED
+  CONFLICT
+}
+
+enum ConflictStatus {
+  OPEN
+  RESOLVED_LOCAL
+  RESOLVED_EXTERNAL
+  RESOLVED_MANUAL
+}
+
+enum InventoryStatus {
+  DRAFT
+  RUNNING
+  COMPLETED
+  CANCELLED
+}
+
+enum InventoryScanResult {
+  EXPECTED
+  WRONG_LOCATION
+  UNEXPECTED
+  UNKNOWN_QR
+}
+
+enum IssueStatus {
+  OPEN
+  IN_PROGRESS
+  RESOLVED
+  CANCELLED
+}
+
+model Room {
+  id                String             @id @default(uuid()) @db.Uuid
+  code              String             @unique
+  name              String
+  building          String?
+  floor             String?
+  qrToken           String             @unique @default(uuid())
+  assets            Asset[]
+  inventorySessions InventorySession[]
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+
+  @@index([building, floor])
+}
+
+model Category {
+  id        String   @id @default(uuid()) @db.Uuid
+  name      String   @unique
+  assets    Asset[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Person {
+  id        String   @id @default(uuid()) @db.Uuid
+  name      String
+  email     String?  @unique
+  assets    Asset[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Asset {
+  id                  String             @id @default(uuid()) @db.Uuid
+  inventoryNumber     String?            @unique
+  name                String
+  description         String?
+  manufacturer        String?
+  model               String?
+  serialNumber        String?
+  acquisitionDate     DateTime?
+  acquisitionPrice    Decimal?           @db.Decimal(14, 2)
+  status              AssetStatus        @default(ACTIVE)
+  condition           AssetCondition     @default(UNKNOWN)
+  qrToken             String             @unique @default(uuid())
+  roomId              String?            @db.Uuid
+  categoryId          String?            @db.Uuid
+  responsiblePersonId String?            @db.Uuid
+  room                Room?              @relation(fields: [roomId], references: [id], onDelete: SetNull)
+  category            Category?          @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  responsiblePerson   Person?            @relation(fields: [responsiblePersonId], references: [id], onDelete: SetNull)
+  events              AssetEvent[]
+  externalMappings    ExternalMapping[]
+  inventoryScans      InventoryScan[]
+  issues              AssetIssue[]
+  serviceRecords      ServiceRecord[]
+  createdAt           DateTime           @default(now())
+  updatedAt           DateTime           @updatedAt
+
+  @@index([roomId, status])
+  @@index([categoryId])
+  @@index([responsiblePersonId])
+  @@index([serialNumber])
+}
+
+model AssetEvent {
+  id        String         @id @default(uuid()) @db.Uuid
+  assetId   String         @db.Uuid
+  type      AssetEventType
+  actorId   String?
+  metadata  Json?
+  asset     Asset          @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  createdAt DateTime       @default(now())
+
+  @@index([assetId, createdAt])
+}
+
+model AssetIssue {
+  id          String      @id @default(uuid()) @db.Uuid
+  assetId     String      @db.Uuid
+  title       String
+  description String?
+  status      IssueStatus @default(OPEN)
+  reportedBy  String?
+  resolvedAt  DateTime?
+  asset       Asset       @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  @@index([status, createdAt])
+  @@index([assetId])
+}
+
+model ServiceRecord {
+  id          String   @id @default(uuid()) @db.Uuid
+  assetId     String   @db.Uuid
+  description String
+  supplier    String?
+  cost        Decimal? @db.Decimal(14, 2)
+  servicedAt  DateTime
+  asset       Asset    @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  createdAt   DateTime @default(now())
+
+  @@index([assetId, servicedAt])
+}
+
+model InventorySession {
+  id            String          @id @default(uuid()) @db.Uuid
+  roomId        String          @db.Uuid
+  status        InventoryStatus @default(DRAFT)
+  initiatedById String?
+  startedAt     DateTime?
+  completedAt   DateTime?
+  room          Room            @relation(fields: [roomId], references: [id], onDelete: Restrict)
+  scans         InventoryScan[]
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+
+  @@index([roomId, status])
+}
+
+model InventoryScan {
+  id              String              @id @default(uuid()) @db.Uuid
+  sessionId       String              @db.Uuid
+  assetId         String?             @db.Uuid
+  rawQrToken      String
+  result          InventoryScanResult
+  offlineClientId String?
+  idempotencyKey  String              @unique
+  scannedAt       DateTime
+  session         InventorySession    @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  asset           Asset?              @relation(fields: [assetId], references: [id], onDelete: SetNull)
+  createdAt       DateTime            @default(now())
+
+  @@index([sessionId, scannedAt])
+  @@index([assetId])
+}
+
+model IntegrationConfig {
+  id          String              @id @default(uuid()) @db.Uuid
+  provider    IntegrationProvider @unique
+  mode        IntegrationMode
+  enabled     Boolean             @default(false)
+  endpoint    String?
+  secretRef   String?
+  metadata    Json?
+  lastSyncAt  DateTime?
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+}
+
+model ExternalMapping {
+  id                  String              @id @default(uuid()) @db.Uuid
+  provider            IntegrationProvider
+  externalId          String
+  assetId             String              @db.Uuid
+  externalInventoryNo String?
+  lastExternalVersion String?
+  lastSyncAt          DateTime?
+  syncStatus          SyncStatus          @default(PENDING)
+  asset               Asset               @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
+
+  @@unique([provider, externalId])
+  @@unique([provider, assetId])
+  @@index([syncStatus])
+}
+
+model SyncJob {
+  id             String              @id @default(uuid()) @db.Uuid
+  provider       IntegrationProvider
+  entityType     String
+  entityId       String
+  direction      SyncDirection
+  operation      String
+  payload        Json
+  status         SyncStatus          @default(PENDING)
+  idempotencyKey String              @unique
+  attempts       Int                 @default(0)
+  lastError      String?
+  nextAttemptAt  DateTime?
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+
+  @@index([status, nextAttemptAt])
+  @@index([provider, entityType, entityId])
+}
+
+model SyncConflict {
+  id            String              @id @default(uuid()) @db.Uuid
+  provider      IntegrationProvider
+  entityType    String
+  entityId      String
+  fieldName     String
+  localValue    Json?
+  externalValue Json?
+  status        ConflictStatus      @default(OPEN)
+  resolutionBy  String?
+  resolvedAt    DateTime?
+  createdAt     DateTime            @default(now())
+  updatedAt     DateTime            @updatedAt
+
+  @@index([status, createdAt])
+  @@index([provider, entityType, entityId])
+}
+
+model ExternalSnapshot {
+  id         String              @id @default(uuid()) @db.Uuid
+  provider   IntegrationProvider
+  externalId String
+  version    String?
+  checksum   String?
+  payload    Json
+  capturedAt DateTime            @default(now())
+
+  @@index([provider, externalId, capturedAt])
+}
